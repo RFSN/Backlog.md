@@ -30,7 +30,7 @@ remains fully synchronized and up-to-date.
 
 ### Key Understanding
 
-- **Tasks** live in `backlog/tasks/` as `task-<id> - <title>.md` files; with `task_milestone_folders: true` in the config, a task with a milestone lives in the subfolder named after its milestone file
+- **Tasks** live in `backlog/tasks/` as `task-<id> - <title>.md` files; a task with a milestone lives in the subfolder named after its milestone file
 - **You interact via CLI only**: `backlog task create`, `backlog task edit`, etc.
 - **Use `--plain`** for readable task context, or **use `--json`** when code needs structured fields
 - **Never bypass the CLI** - It handles Git, metadata, file naming, and relationships

@@ -25,7 +25,6 @@ const BOOLEAN_CONFIG_KEYS = new Set([
 	"filesystemOnly",
 	"bypass_git_hooks",
 	"check_active_branches",
-	"task_milestone_folders",
 ]);
 const ARRAY_CONFIG_KEYS = new Set(["statuses", "labels", "types", "priorities"]);
 const INTEGER_CONFIG_KEYS = new Set(["max_column_width", "default_port", "zero_padded_ids", "active_branch_days"]);

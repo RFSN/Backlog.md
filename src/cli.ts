@@ -178,7 +178,6 @@ const CONFIG_GET_KEYS = [
 	"zeroPaddedIds",
 	"checkActiveBranches",
 	"activeBranchDays",
-	"taskMilestoneFolders",
 ] as const;
 
 const CONFIG_SET_KEYS = [
@@ -197,7 +196,6 @@ const CONFIG_SET_KEYS = [
 	"zeroPaddedIds",
 	"checkActiveBranches",
 	"activeBranchDays",
-	"taskMilestoneFolders",
 ] as const;
 
 function normalizeIntegrationOption(value: string): IntegrationMode | null {
@@ -5270,7 +5268,7 @@ agentsCmd
 
 // Config command group
 const CONFIG_AVAILABLE_KEYS =
-	"Available keys: defaultEditor, projectName, defaultAssignee, defaultStatus, statuses, labels, priorities, types, projects, milestones, definitionOfDone, dateFormat, maxColumnWidth, defaultPort, autoOpenBrowser, hideEmptyColumns, remoteOperations, autoCommit, filesystemOnly, bypassGitHooks, zeroPaddedIds, checkActiveBranches, activeBranchDays, taskMilestoneFolders";
+	"Available keys: defaultEditor, projectName, defaultAssignee, defaultStatus, statuses, labels, priorities, types, projects, milestones, definitionOfDone, dateFormat, maxColumnWidth, defaultPort, autoOpenBrowser, hideEmptyColumns, remoteOperations, autoCommit, filesystemOnly, bypassGitHooks, zeroPaddedIds, checkActiveBranches, activeBranchDays";
 
 const configCmd = addHelpSchema(program.command("config"), {
 	reads: "Project Backlog.md configuration",
@@ -5461,9 +5459,6 @@ addHelpSchema(configCmd.command("get <key>"), {
 					break;
 				case "activeBranchDays":
 					console.log(config.activeBranchDays?.toString() || "30");
-					break;
-				case "taskMilestoneFolders":
-					console.log(config.taskMilestoneFolders?.toString() || "false");
 					break;
 				default:
 					console.error(`Unknown config key: ${key}`);
@@ -5656,18 +5651,6 @@ addHelpSchema(configCmd.command("set <key> <value>"), {
 					config.activeBranchDays = days;
 					break;
 				}
-				case "taskMilestoneFolders": {
-					const boolValue = value.toLowerCase();
-					if (boolValue === "true" || boolValue === "1" || boolValue === "yes") {
-						config.taskMilestoneFolders = true;
-					} else if (boolValue === "false" || boolValue === "0" || boolValue === "no") {
-						config.taskMilestoneFolders = false;
-					} else {
-						console.error("taskMilestoneFolders must be true or false");
-						process.exit(1);
-					}
-					break;
-				}
 				case "statuses":
 				case "labels":
 				case "types":
@@ -5763,7 +5746,6 @@ addHelpSchema(configCmd.command("list"), {
 			console.log(`  taskPrefix: ${config.prefixes?.task || "task"} (read-only)`);
 			console.log(`  checkActiveBranches: ${config.checkActiveBranches ?? "true"}`);
 			console.log(`  activeBranchDays: ${config.activeBranchDays ?? "30"}`);
-			console.log(`  taskMilestoneFolders: ${config.taskMilestoneFolders ?? "false"}`);
 		} catch (err) {
 			reportCommandFailure("Failed to list config values", err);
 		}

@@ -392,8 +392,6 @@ export interface BacklogConfig {
 	bypassGitHooks?: boolean;
 	checkActiveBranches?: boolean; // Check task states across active branches (default: true)
 	activeBranchDays?: number; // How many days a branch is considered active (default: 30)
-	/** 有里程碑的任务存放在以里程碑文件名命名的子目录里（默认关闭，与原版一样平铺）。 */
-	taskMilestoneFolders?: boolean;
 	/** Project-relative backlog folder when config is stored at project root in backlog.config.yml. */
 	backlogDirectory?: string;
 	/** Global callback command to run on any task status change. Supports $TASK_ID, $OLD_STATUS, $NEW_STATUS, $TASK_TITLE variables. */
