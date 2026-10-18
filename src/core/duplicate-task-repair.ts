@@ -190,11 +190,8 @@ function matchesConfiguredPadding(taskId: string, zeroPaddedIds?: number): boole
  */
 function idPriority(task: Task, archiveDirectory: string): number {
 	if (getTaskLocation(task) === "active") return 0;
-	return dirname(task.filePath ?? "")
-		.split(sep)
-		.join("/") === archiveDirectory
-		? 2
-		: 1;
+	// 归档目录下按里程碑分了子目录，按路径前缀判断。
+	return (task.filePath ?? "").split(sep).join("/").startsWith(`${archiveDirectory}/`) ? 2 : 1;
 }
 
 function sortGroupTasks(tasks: Task[], archiveDirectory: string, zeroPaddedIds?: number): Task[] {

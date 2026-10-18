@@ -97,6 +97,7 @@ import {
 	LOCAL_TASK_LOOKUP_HINT,
 	normalizeTaskId,
 	normalizeTaskIdentity,
+	scanTaskFiles,
 	taskIdsEqual,
 } from "../utils/task-path.ts";
 import { applyTaskFilters, createTaskSearchIndex } from "../utils/task-search.ts";
@@ -1999,13 +2000,13 @@ export class Core {
 		for (const { path, type } of directories) {
 			let files: string[];
 			try {
-				files = await Array.fromAsync(new Bun.Glob(globPattern).scan({ cwd: path, followSymlinks: true }));
+				files = await scanTaskFiles(path, globPattern);
 			} catch {
 				continue;
 			}
 
 			for (const file of files) {
-				const id = extractIdFromFilename(file, taskPrefix);
+				const id = extractIdFromFilename(basename(file), taskPrefix);
 				if (!id) continue;
 
 				const filePath = join(path, file);
@@ -2384,7 +2385,14 @@ export class Core {
 		// Keep any in-process ContentStore in sync for immediate UI/search freshness.
 
 		if (await this.shouldAutoCommit(autoCommit)) {
-			await this.git.addAndCommitTaskFile(task.id, filePath, "update");
+			// 改了里程碑的任务换了子目录，旧路径的删除要一并提交。
+			if (task.filePath && task.filePath !== filePath) {
+				await this.stageChangedPath(task.filePath);
+				await this.stageChangedPath(filePath);
+				await this.git.commitFiles(`Update task ${task.id}`, [task.filePath, filePath]);
+			} else {
+				await this.git.addAndCommitTaskFile(task.id, filePath, "update");
+			}
 		}
 
 		// Fire status change callback if status changed
@@ -3336,12 +3344,14 @@ export class Core {
 		return await this.updateTaskFromInput(taskId, input, autoCommit, options);
 	}
 
-	private async writeTasksBulk(tasks: Task[]): Promise<string[]> {
+	private async writeTasksBulk(tasks: Task[]): Promise<{ filePaths: string[]; movedFromPaths: string[] }> {
 		const filePaths: string[] = [];
+		const movedFromPaths: string[] = [];
 		const updateAll = async () => {
 			for (const task of tasks) {
 				const filePath = await this.updateTask(task, false);
 				filePaths.push(filePath);
+				if (task.filePath && task.filePath !== filePath) movedFromPaths.push(task.filePath);
 				// Keep an in-process ContentStore serving what was just written: without this the
 				// server, MCP and TUI keep reading the pre-write copy until a watcher refresh lands.
 				this.contentStore?.upsertTask({ ...task, filePath });
@@ -3349,17 +3359,22 @@ export class Core {
 		};
 		if (this.contentStore) await this.contentStore.batchTaskUpdates(updateAll);
 		else await updateAll();
-		return filePaths;
+		return { filePaths, movedFromPaths };
 	}
 
 	async updateTasksBulk(tasks: Task[], commitMessage?: string, autoCommit?: boolean): Promise<void> {
-		const filePaths = await this.fs.withTaskLocks(tasks, async () => await this.writeTasksBulk(tasks));
+		const { filePaths, movedFromPaths } = await this.fs.withTaskLocks(
+			tasks,
+			async () => await this.writeTasksBulk(tasks),
+		);
 
 		// Commit all changes at once if auto-commit is enabled
 		if (await this.shouldAutoCommit(autoCommit)) {
 			if (filePaths.length > 0) {
 				await this.git.addFiles(filePaths);
-				await this.git.commitFiles(commitMessage || `Update ${tasks.length} tasks`, filePaths);
+				// 按里程碑换了子目录的任务，旧路径的删除一并提交。
+				for (const path of movedFromPaths) await this.stageChangedPath(path);
+				await this.git.commitFiles(commitMessage || `Update ${tasks.length} tasks`, [...filePaths, ...movedFromPaths]);
 			}
 		}
 	}
@@ -3785,7 +3800,11 @@ export class Core {
 				const current = await this.loadTaskForMutation(task.id, options);
 				const fromPath = current?.filePath;
 				if (!current || !fromPath) return false;
-				const toPath = join(await this.fs.getArchiveTasksDir(), basename(fromPath));
+				const toPath = join(
+					await this.fs.getArchiveTasksDir(),
+					await this.fs.getTaskSubdirectory(current),
+					basename(fromPath),
+				);
 				await this.moveRecordFile(
 					fromPath,
 					toPath,
@@ -3862,7 +3881,11 @@ export class Core {
 					failureStep = "committing the change";
 					// A task file keeps its name through the archive, so this is where the task was on the board.
 					// If the archive was never committed, Git still tracks the task there, so its removal is committed too.
-					const boardPath = join(this.fs.tasksDir, basename(current.filePath));
+					const boardPath = join(
+						this.fs.tasksDir,
+						await this.fs.getTaskSubdirectory(current),
+						basename(current.filePath),
+					);
 					const changedPaths = [current.filePath, boardPath, ...written.filePaths];
 					for (const path of changedPaths) await this.stageChangedPath(path);
 					await this.git.commitFiles(`backlog: Delete task ${current.id}`, changedPaths);
@@ -3898,7 +3921,7 @@ export class Core {
 				const current = await this.loadArchivedTask(task.id, "restore", options);
 				const fromPath = current?.filePath;
 				if (!current || !fromPath) return false;
-				const toPath = join(this.fs.tasksDir, basename(fromPath));
+				const toPath = join(this.fs.tasksDir, await this.fs.getTaskSubdirectory(current), basename(fromPath));
 				await this.moveRecordFile(
 					fromPath,
 					toPath,

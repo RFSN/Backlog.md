@@ -1,9 +1,16 @@
 import { type FSWatcher, watch } from "node:fs";
 import { stat } from "node:fs/promises";
+import { basename } from "node:path";
 import type { Core } from "../core/backlog.ts";
 import type { Task } from "../types/index.ts";
 import { hasAnyPrefix } from "./prefix-config.ts";
-import { extractTaskIdFromFilename, normalizeTaskId, normalizeTaskIdentity, taskIdsEqual } from "./task-path.ts";
+import {
+	extractTaskIdFromFilename,
+	normalizeTaskId,
+	normalizeTaskIdentity,
+	scanTaskFiles,
+	taskIdsEqual,
+} from "./task-path.ts";
 
 export interface TaskWatcherCallbacks {
 	/** Called when a new task file is created */
@@ -60,11 +67,11 @@ async function readTaskFileSnapshot(tasksDir: string): Promise<TaskFileSnapshot>
 	try {
 		const directory = await stat(tasksDir);
 		if (!directory.isDirectory()) return { state: "incomplete" };
-		const files = await Array.fromAsync(new Bun.Glob("*.md").scan({ cwd: tasksDir, followSymlinks: true }));
+		const files = await scanTaskFiles(tasksDir, "*.md");
 		await stat(tasksDir);
 		const taskIds = new Set<string>();
 		for (const file of files) {
-			const taskId = extractTaskIdFromFilename(file);
+			const taskId = extractTaskIdFromFilename(basename(file));
 			if (taskId) taskIds.add(normalizeTaskId(taskId));
 		}
 		return { state: "complete", taskIds };
@@ -203,13 +210,14 @@ export function watchTasks(
 		})().catch(() => {});
 	};
 
-	const watcher: FSWatcher = watch(tasksDir, { recursive: false }, (eventType, filename) => {
+	// 任务按里程碑分子目录存放，递归监听；编号取文件名部分。
+	const watcher: FSWatcher = watch(tasksDir, { recursive: true }, (eventType, filename) => {
 		if (eventType !== "change" && eventType !== "rename") return;
 
 		const rawFilename: unknown = filename;
 		const fileName =
 			typeof rawFilename === "string" ? rawFilename : rawFilename != null ? String(rawFilename) : undefined;
-		const [taskId] = fileName?.split(" ") ?? [];
+		const [taskId] = fileName ? basename(fileName).split(" ") : [];
 		if (!fileName || !taskId || !hasAnyPrefix(taskId) || !fileName.endsWith(".md")) {
 			scheduleDirectoryReconciliation();
 			return;

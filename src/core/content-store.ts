@@ -1084,15 +1084,16 @@ export class ContentStore {
 		const tasksDir = this.filesystem.tasksDir;
 		// Listed before the first watcher opens, so a failure here leaves nothing to close.
 		const archivedTaskDirs = await this.filesystem.getArchivedTaskDirs();
-		const watcher: FSWatcher = watch(tasksDir, { recursive: false }, (eventType, filename) => {
+		// 任务按里程碑分子目录存放，递归监听；事件里的文件名带子目录，编号取文件名部分。
+		const watcher: FSWatcher = watch(tasksDir, { recursive: true }, (eventType, filename) => {
 			const file = this.normalizeFilename(filename);
-			if (!file || !/^[a-zA-Z]+-/.test(file) || !file.endsWith(".md")) {
+			if (!file || !/^[a-zA-Z]+-/.test(basename(file)) || !file.endsWith(".md")) {
 				void this.enqueueRoot(epoch, async () => this.refreshTasksFromDisk(undefined, epoch));
 				return;
 			}
 
 			void this.enqueueRoot(epoch, async () => {
-				const [taskId] = file.split(" ");
+				const [taskId] = basename(file).split(" ");
 				if (!taskId) return;
 				const normalizedTaskId = normalizeTaskId(taskId);
 				const fullPath = join(tasksDir, file);
@@ -1108,7 +1109,7 @@ export class ContentStore {
 						findIdentity: async () => {
 							const local = await this.findIdentityCandidate(
 								tasksDir,
-								"*.md",
+								"**/*.md",
 								(path) => {
 									const [candidateId] = basename(path).split(" ");
 									return candidateId ? taskIdsEqual(candidateId, normalizedTaskId) : false;
@@ -1169,7 +1170,7 @@ export class ContentStore {
 		// Any change in a directory archived tasks are read from reloads the task corpus.
 		const watchers = [watcher];
 		for (const directory of archivedTaskDirs) {
-			const archivedWatcher = watch(directory, { recursive: false }, () => {
+			const archivedWatcher = watch(directory, { recursive: true }, () => {
 				void this.enqueueRoot(epoch, async () => this.refreshTasksFromDisk(undefined, epoch));
 			});
 			this.attachWatcherErrorHandler(archivedWatcher, "archived tasks");

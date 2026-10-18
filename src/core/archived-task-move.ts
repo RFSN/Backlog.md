@@ -1,6 +1,7 @@
 import { copyFile, lstat, mkdir, open, readlink, realpath, symlink, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { buildGlobPattern } from "../utils/prefix-config.ts";
+import { scanTaskFiles } from "../utils/task-path.ts";
 import type { Core } from "./backlog.ts";
 import { findLocalDuplicateTaskIds, installFileNoReplace } from "./duplicate-task-repair.ts";
 
@@ -71,7 +72,7 @@ export async function previewArchivedTaskMove(core: Core): Promise<ArchivedTaskM
 	for (const { directory, realDirectory } of await core.filesystem.getArchivedTaskLocations()) {
 		if (directory === archiveDirectory) continue;
 		const movesBefore = plan.moves.length;
-		const files = await Array.fromAsync(new Bun.Glob(pattern).scan({ cwd: directory, followSymlinks: true }));
+		const files = await scanTaskFiles(directory, pattern);
 		for (const file of files.sort((left, right) => left.localeCompare(right))) {
 			const sourcePath = projectPath(core, join(directory, file));
 			const targetPath = join(archiveDirectory, file);
@@ -199,9 +200,10 @@ export async function moveArchivedTasks(core: Core): Promise<ArchivedTaskMovePla
 		const moved: ArchivedTaskMovePlan = { ...plan, moves: [] };
 		if (plan.moves.length === 0) return moved;
 
-		await mkdir(core.filesystem.archiveTasksDir, { recursive: true });
 		for (const move of plan.moves) {
 			try {
+				// 任务可能在子目录里，按目标文件所在目录建。
+				await mkdir(dirname(join(core.filesystem.rootDir, move.targetPath)), { recursive: true });
 				await moveWithoutReplacing(
 					join(core.filesystem.rootDir, move.sourcePath),
 					join(core.filesystem.rootDir, move.targetPath),

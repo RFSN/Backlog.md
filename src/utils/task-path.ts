@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { type Core, createRuntimeCore } from "../core/backlog.ts";
 import type { Task } from "../types/index.ts";
@@ -102,18 +103,33 @@ export async function getTaskPath(taskId: string, core?: Core | TaskPathContext)
 	return activeMatches[0] ?? null;
 }
 
+/**
+ * 列出任务目录下匹配 `pattern` 的文件（相对路径）。任务可存放在按里程碑划分的子目录里，所以递归扫描并跟随链接。
+ * 目录下直接存放的文件全部保留；子目录里的文件若与已列出的文件是同一真实文件（如链回上级的目录）则跳过。
+ */
+export async function scanTaskFiles(directory: string, pattern: string): Promise<string[]> {
+	const files = await Array.fromAsync(new Bun.Glob(`**/${pattern}`).scan({ cwd: directory, followSymlinks: true }));
+	const depth = (file: string) => file.split(/[\\/]/).length;
+	files.sort((left, right) => depth(left) - depth(right) || left.localeCompare(right));
+	const realPaths = new Set<string>();
+	const unique: string[] = [];
+	for (const file of files) {
+		const path = join(directory, file);
+		const realPath = await realpath(path).catch(() => path);
+		if (depth(file) > 1 && realPaths.has(realPath)) continue;
+		realPaths.add(realPath);
+		unique.push(file);
+	}
+	return unique;
+}
+
 async function findMatchingTaskPaths(directory: string, taskId: string): Promise<string[]> {
 	const detectedPrefix = extractAnyPrefix(taskId);
 	try {
-		const files = await Array.fromAsync(
-			new Bun.Glob(detectedPrefix ? buildGlobPattern(detectedPrefix) : "*.md").scan({
-				cwd: directory,
-				followSymlinks: true,
-			}),
-		);
+		const files = await scanTaskFiles(directory, detectedPrefix ? buildGlobPattern(detectedPrefix) : "*.md");
 		return files
 			.filter((file) => {
-				const fileTaskId = extractTaskIdFromFilename(file);
+				const fileTaskId = extractTaskIdFromFilename(basename(file));
 				if (!fileTaskId) return false;
 				const filePrefix = extractAnyPrefix(fileTaskId);
 				if (detectedPrefix && filePrefix?.toLowerCase() !== detectedPrefix.toLowerCase()) return false;

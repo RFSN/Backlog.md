@@ -67,6 +67,7 @@ import {
 	getTaskPath,
 	isAmbiguousTaskIdError,
 	normalizeTaskIdentity,
+	scanTaskFiles,
 	taskIdsEqual,
 } from "../utils/task-path.ts";
 import { sortByTaskId } from "../utils/task-sorting.ts";
@@ -941,7 +942,29 @@ export class FileSystem {
 		const directory = isDraft ? await this.getDraftsDir() : await this.getTasksDir();
 		const namedPath = join(directory, filename);
 		const loadedFromPath = task.filePath?.trim() ? task.filePath : undefined;
+		// 开启 task_milestone_folders 时，看板上的任务按里程碑换子目录、保留文件名；归档区的任务仍原地写回。
+		if (
+			!isDraft &&
+			(await this.loadConfig())?.taskMilestoneFolders &&
+			(!loadedFromPath || isWithinDirectory(resolve(directory), resolve(loadedFromPath)))
+		) {
+			const subdirectory = join(directory, await this.getTaskSubdirectory(task));
+			return { id, filePath: join(subdirectory, loadedFromPath ? basename(loadedFromPath) : filename), loadedFromPath };
+		}
 		return { id, filePath: isDraft ? namedPath : (loadedFromPath ?? namedPath), loadedFromPath };
+	}
+
+	/**
+	 * 开启 task_milestone_folders 时，任务在任务目录与归档目录下的子目录：取里程碑文件名（不含扩展名）。
+	 * 未开启、没有里程碑或找不到里程碑时为空，即直接放在目录下。
+	 */
+	async getTaskSubdirectory(task: Task): Promise<string> {
+		const milestone = task.milestone?.trim();
+		if (!milestone || !(await this.loadConfig())?.taskMilestoneFolders) return "";
+		// 里程碑目录不存在时扫描会抛错，此时按无里程碑处理。
+		const find = (scope: "active" | "archived") => this.findMilestoneFile(milestone, scope).catch(() => null);
+		const match = (await find("active")) ?? (await find("archived"));
+		return match ? basename(match.file, ".md") : "";
 	}
 
 	async getTaskWritePath(task: Task, isDraft = false): Promise<string> {
@@ -955,7 +978,7 @@ export class FileSystem {
 
 		if (loadedFromPath) {
 			try {
-				existingTask = parseTask(await Bun.file(filepath).text());
+				existingTask = parseTask(await Bun.file(loadedFromPath).text());
 			} catch (error) {
 				if (error instanceof TaskDependenciesParseError) throw error;
 				existingTask = null;
@@ -1111,7 +1134,7 @@ export class FileSystem {
 		if (cacheEpoch === this.taskParseCacheEpoch) {
 			const trackedPaths = new Set([...this.parsedTaskFiles.keys(), ...this.taskFileReadGenerations.keys()]);
 			for (const trackedPath of trackedPaths) {
-				if (dirname(trackedPath) === directoryPath && !livePaths.has(trackedPath)) {
+				if (trackedPath.startsWith(`${directoryPath}${sep}`) && !livePaths.has(trackedPath)) {
 					this.parsedTaskFiles.delete(trackedPath);
 					this.taskFileReadGenerations.delete(trackedPath);
 				}
@@ -1158,7 +1181,7 @@ export class FileSystem {
 
 		let taskFiles: string[];
 		try {
-			taskFiles = await Array.fromAsync(new Bun.Glob(globPattern).scan({ cwd: tasksDir, followSymlinks: true }));
+			taskFiles = await scanTaskFiles(tasksDir, globPattern);
 		} catch (_error) {
 			return [];
 		}
@@ -1224,7 +1247,7 @@ export class FileSystem {
 		for (const directory of archivedTaskDirs) {
 			let taskFiles: string[];
 			try {
-				taskFiles = await Array.fromAsync(new Bun.Glob(globPattern).scan({ cwd: directory, followSymlinks: true }));
+				taskFiles = await scanTaskFiles(directory, globPattern);
 			} catch (_error) {
 				continue;
 			}
@@ -2231,6 +2254,7 @@ ${description || `Milestone: ${title}`}`,
 				movedFile = true;
 			}
 			await Bun.write(targetPath, updatedContent);
+			if (movedFile) await this.renameTaskSubdirectories(basename(sourcePath, ".md"), basename(targetPath, ".md"));
 
 			return {
 				success: true,
@@ -2257,6 +2281,22 @@ ${description || `Milestone: ${title}`}`,
 				// Ignore rollback failures and surface operation failure to caller.
 			}
 			return { success: false };
+		}
+	}
+
+	/**
+	 * 开启 task_milestone_folders 时，里程碑文件改名后，任务目录与归档目录下同名的任务子目录跟着改名。
+	 * 失败不影响改名结果：没跟上的任务仍能读到，下次保存时移到新目录。
+	 */
+	private async renameTaskSubdirectories(fromName: string, toName: string): Promise<void> {
+		if (!(await this.loadConfig())?.taskMilestoneFolders) return;
+		for (const directory of [await this.getTasksDir(), await this.getArchiveTasksDir()]) {
+			try {
+				// 目标已是非空目录或文件时 rename 报错，保留原状。
+				await rename(join(directory, fromName), join(directory, toName));
+			} catch {
+				// 源目录不存在或改名失败时保留原状。
+			}
 		}
 	}
 
@@ -2437,6 +2477,9 @@ ${description || `Milestone: ${title}`}`,
 				case "active_branch_days":
 					config.activeBranchDays = Number.parseInt(value, 10);
 					break;
+				case "task_milestone_folders":
+					config.taskMilestoneFolders = value.toLowerCase() === "true";
+					break;
 				case "onStatusChange":
 				case "on_status_change":
 					// Remove surrounding quotes if present, but preserve inner content
@@ -2476,6 +2519,7 @@ ${description || `Milestone: ${title}`}`,
 			bypassGitHooks: config.bypassGitHooks,
 			checkActiveBranches: config.checkActiveBranches,
 			activeBranchDays: config.activeBranchDays,
+			taskMilestoneFolders: config.taskMilestoneFolders,
 			onStatusChange: config.onStatusChange,
 			prefixes: config.prefixes,
 			backlogDirectory: config.backlogDirectory,
@@ -2518,6 +2562,9 @@ ${description || `Milestone: ${title}`}`,
 				? [`check_active_branches: ${config.checkActiveBranches}`]
 				: []),
 			...(typeof config.activeBranchDays === "number" ? [`active_branch_days: ${config.activeBranchDays}`] : []),
+			...(typeof config.taskMilestoneFolders === "boolean"
+				? [`task_milestone_folders: ${config.taskMilestoneFolders}`]
+				: []),
 			...(config.onStatusChange ? [`onStatusChange: '${config.onStatusChange}'`] : []),
 			...(config.prefixes?.task ? [`task_prefix: "${config.prefixes.task}"`] : []),
 			...(config.backlogDirectory ? [`backlog_directory: "${config.backlogDirectory}"`] : []),
